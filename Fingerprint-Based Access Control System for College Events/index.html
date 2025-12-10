@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fingerprint-Based Access Control System for College Events</title>
+  <link rel="shortcut icon" href="iconimg.png" type="image/png">
+  <style>
+    body { font-family: Arial, sans-serif; background: #121212; color: #f5f6fa; margin: 0; padding: 0; }
+    header { background: #2f3640; color: white; padding: 15px; font-size: 22px; font-weight: bold; display: flex; justify-content: space-between; align-items: center; }
+    .status-box div { padding: 3px 6px; border-radius: 4px; margin: 2px; display: inline-block; font-size: 13px; }
+    .ok { background: #4cd137; color: white; }
+    .err { background: #e84118; color: white; }
+    .warn { background: #fbc531; color: black; }
+    .menu { display: flex; justify-content: center; background: #353b48; padding: 10px; gap: 8px; }
+    .menu button { padding: 10px 18px; border: none; border-radius: 5px; background: #718093; color: white; cursor: pointer; }
+    .menu button.active { background: #44bd32; }
+    .container { padding: 20px; max-width: 900px; margin: auto; background: #1e272e; border-radius: 10px; margin-top: 20px; }
+    .panel { display: none; }
+    .lcd-display { background: #000; color: #0f0; font-family: 'Courier New', monospace; font-size: 15px; padding: 10px; border-radius: 5px; height: 80px; overflow-y: auto; white-space: pre-wrap; margin-top: 15px; box-shadow: inset 0 0 5px #333; }
+    .small-display { background: #111; color: #fff; font-family: 'Courier New', monospace; font-size: 14px; padding: 6px; border-radius: 5px; height: 30px; display: flex; align-items: center; justify-content: center; margin-top: 10px; box-shadow: inset 0 0 5px #333; }
+    .success { background: #27ae60; color: #fff; }
+    .fail { background: #c0392b; color: #fff; }
+    table { width: 100%; border-collapse: collapse; margin-top: 15px; background: #2f3640; }
+    th, td { border: 1px solid #718093; padding: 8px; text-align: center; color: white; }
+    th { background: #353b48; }
+
+    #startEnroll { background: #27ae60; color: white; font-size: 16px; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; }
+    #startEnroll:hover { background: #2ecc71; }
+    #cancelEnroll { background: #c0392b; color: white; font-size: 16px; padding: 10px 20px; border: none; border-radius: 6px; cursor: pointer; margin-left: 10px; }
+    #cancelEnroll:hover { background: #e74c3c; }
+  </style>
+</head>
+<body>
+
+<header>
+  <div>A Mini Project on Fingerprint-Based Access Control System for College Events</div>
+  <div class="status-box">
+    <div id="wsStatus" class="warn">WebSocket: Connecting...</div>
+    <div id="deviceStatus" class="err">Device: Not connected</div>
+  </div>
+</header>
+
+<div class="menu">
+  <button id="btnEnroll" class="active">Enroll</button>
+  <button id="btnList">User List</button>
+</div>
+
+<div class="container">
+  <div id="panelEnroll" class="panel" style="display:block;">
+    <h3>Enroll Fingerprint</h3>
+    <input type="text" id="enrollRoll" placeholder="Enter Roll Number" style="padding:8px; width:200px;"><br><br>
+    <button id="startEnroll">Start Enrollment</button>
+    <button id="cancelEnroll">Cancel</button>
+    <div class="lcd-display" id="lcdDisplay">Waiting for action...</div>
+    <div class="small-display" id="smallDisplay">Ready.</div>
+  </div>
+
+  <div id="panelList" class="panel">
+    <h3>Registered Users</h3>
+    <button id="refreshList">Refresh List</button>
+    <button id="exportCsv">Export CSV</button>
+    <table id="usersTable">
+      <thead>
+        <tr><th>S.No</th><th>ID_No</th><th>Roll Number</th><th>Date</th><th>Action</th></tr>
+      </thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const ws = new WebSocket("ws://localhost:8765");
+const wsStatus = document.getElementById("wsStatus");
+const deviceStatus = document.getElementById("deviceStatus");
+const lcd = document.getElementById("lcdDisplay");
+const smallDisplay = document.getElementById("smallDisplay");
+
+function showResult(msg, success = true) {
+  smallDisplay.textContent = msg;
+  smallDisplay.className = "small-display " + (success ? "success" : "fail");
+  setTimeout(() => { smallDisplay.textContent = ""; }, 80000);
+}
+
+ws.onopen = () => { wsStatus.className = "ok"; wsStatus.textContent = "WebSocket: Connected"; ws.send("GET_STATUS"); };
+ws.onclose = () => { wsStatus.className = "err"; wsStatus.textContent = "WebSocket: Disconnected"; };
+ws.onerror = () => { wsStatus.className = "err"; wsStatus.textContent = "WebSocket: Error"; };
+
+ws.onmessage = (e) => {
+  const msg = e.data.trim();
+  console.log("[WS]", msg);
+  if (msg.startsWith("STATUS:")) {
+    deviceStatus.className = msg.includes("CONNECTED") ? "ok" : "err";
+    deviceStatus.textContent = msg.includes("CONNECTED") ? "Device: Connected" : "Device: Not Connected";
+    return;
+  }
+  if (msg.startsWith("USERS:")) updateUsersTable(JSON.parse(msg.substring(6)));
+  if (msg.startsWith("LCD:")) {
+    const info = msg.substring(4);
+    lcd.textContent += "\n" + info;
+    lcd.scrollTop = lcd.scrollHeight;
+    if (info.includes("already exists") || info.includes("enrolled")) showResult(info, false);
+    return;
+  }
+  if (msg.includes("ENROLL_SUCCESS:")) {
+    lcd.textContent += "\nEnrollment successful!";
+    showResult("Enrollment successful!", true);
+  }
+  if (msg.includes("ENROLL_FAIL") || msg.includes("FAIL")) showResult("Enrollment failed!", false);
+  if (msg.includes("DELETE_SUCCESS:")) showResult("User deleted successfully!", true);
+  if (msg.includes("ENROLL") || msg.includes("Place") || msg.includes("Remove")) {
+    lcd.textContent += "\n" + msg;
+    lcd.scrollTop = lcd.scrollHeight;
+  }
+  if (msg.startsWith("JSON_UPDATED:SUCCESS")) { showResult("New user added successfully!", true); send("LIST_USERS"); return; }
+  if (msg.startsWith("DELETE_UPDATED:SUCCESS")) { showResult("User deleted successfully!", true); send("LIST_USERS"); return; }
+};
+
+function send(cmd) { if (ws.readyState === WebSocket.OPEN) ws.send(cmd); }
+
+const panels = { btnEnroll: "panelEnroll", btnList: "panelList" };
+document.querySelectorAll(".menu button").forEach(btn => {
+  btn.onclick = () => {
+    document.querySelectorAll(".menu button").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    Object.values(panels).forEach(id => document.getElementById(id).style.display = "none");
+    const activePanel = document.getElementById(panels[btn.id]);
+    activePanel.style.display = "block";
+    if (btn.id === "btnList") send("LIST_USERS");
+  };
+});
+
+document.getElementById("startEnroll").onclick = () => {
+  const roll = document.getElementById("enrollRoll").value.trim();
+  if (roll) {
+    lcd.textContent = `Starting enrollment for ${roll}...`;
+    showResult("Enrolling " + roll + "...", true);
+    send("ENROLL:" + roll);
+  }
+};
+document.getElementById("cancelEnroll").onclick = () => {
+  lcd.textContent = "Enrollment cancelled.";
+  showResult("Enrollment cancelled", false);
+  send("ENROLL_CANCEL");
+};
+document.getElementById("refreshList").onclick = () => send("LIST_USERS");
+
+
+function updateUsersTable(users) {
+  // Sort users by roll number (case-insensitive + numeric-friendly)
+  users.sort((a, b) => a.roll.localeCompare(b.roll, undefined, { numeric: true, sensitivity: 'base' }));
+
+  const tbody = document.querySelector("#usersTable tbody");
+  tbody.innerHTML = "";
+  if (users.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="5">No users</td></tr>`;
+    return;
+  }
+
+  users.forEach((u, i) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td>${i + 1}</td>
+      <td>${u.ID_No || '-'}</td>
+      <td>${u.roll}</td>
+      <td>${u.date}</td>
+      <td><button onclick="send('DELETE:${u.roll}')">Delete</button></td>
+    `;
+    tbody.appendChild(tr);
+  });
+}
+
+
+
+document.getElementById("exportCsv").onclick = () => {
+  const rows = [["S.No", "ID_No", "Roll Number", "Date"]];
+  document.querySelectorAll("#usersTable tbody tr").forEach((tr, i) => {
+    const tds = tr.querySelectorAll("td");
+    if (tds.length >= 4) rows.push([tds[0].innerText, tds[1].innerText, tds[2].innerText, tds[3].innerText]);
+  });
+  const blob = new Blob([rows.map(r => r.join(",")).join("\n")], { type: "text/csv;charset=utf-8;" });
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(blob);
+  link.download = "registered_users.csv";
+  link.click();
+  showResult("CSV exported successfully!", true);
+};
+</script>
+</body>
+</html>
